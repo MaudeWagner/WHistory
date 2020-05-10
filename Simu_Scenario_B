@@ -1,4 +1,4 @@
-####################  Programme de simulation #################################
+
 ##### PACKAGES
 library(foreach)
 library(doParallel)
@@ -7,7 +7,8 @@ library(doParallel)
 #####    SIMULATION    #####
 ############################
 r = 100   # nb of replicates
-n = 1000 # study sample size
+n = 1000  # study sample size
+b = 500   # boostraps
 
 cl <- makeCluster(100)
 registerDoParallel(cl)
@@ -50,22 +51,22 @@ beta7 = 1.18201   # B5 - splines
 beta_expo = c(beta0,beta1,beta2,beta3,beta4,beta5,beta6,beta7) 
 
 # Variance-covariance matrix
-a0  = 15.18283 # intercept 
-a1  = 0.75011  # B1
+a0  = 15.18283 
+a1  = 0.75011  
 a2  = 3.87000    
-a3  = 0.61380  # B2
+a3  = 0.61380  
 a4  = 2.29688  
 a5  = 5.19461    
-a6  = 0.28564  # B3
+a6  = 0.28564  
 a7  = 2.77645   
 a8  = 3.86102   
 a9  = 6.79335    
-a10 = 0.89555  # B4
+a10 = 0.89555  
 a11 = 3.58081   
 a12 = 5.08378   
 a13 = 7.14886   
 a14 = 10.21279   
-a15 = -0.77568 # B5
+a15 = -0.77568 
 a16 = 2.29376   
 a17 = 3.60954   
 a18 = 5.93701  
@@ -120,132 +121,102 @@ set.seed(1)
 
 
 ########################################################
-#####     EXPOSITION AUX TEMPS DE MESURE NORMAUX   #####
+#####     EXPOSITION AUX TEMPS DE MESURE OBSERVES  #####
 ########################################################
 #### BOUCLE DE SIMULATION
-res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rbind) %dopar% ### paralléliser 
+res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rbind) %dopar% 
 {
-  #### BOUCLE D'INDIVIDUS 
-  #### CREER LA DATAFRAME DE L'EXPOSITION 
-  #### SIMULER les temps de mesures TICS 
-  ## id de l'individu
+  #### CREATION DU DATAFRAME DE L'EXPOSITION 
   for(i in 1:n)
   {
-    texpo  <- 0
-    nbt <- 1
-    indNA <- 0
+    texpo = 0
+    nbt   = 1
+    indNA = 0
     while(texpo[nbt]<tE.max)
     {
-      texpo <- c(texpo,t.ecart_E*nbt+runif(1,-abs(t.marge_E),abs(t.marge_E)))  
-      indNA <- c(indNA,rbinom(1,1,pMCAR_E))
-      nbt <- nbt+1
+      texpo = c(texpo,t.ecart_E*nbt+runif(1,-abs(t.marge_E),abs(t.marge_E)))  
+      indNA = c(indNA,rbinom(1,1,pMCAR_E))
+      nbt   = nbt+1
     }
     if(texpo[nbt]>tE.max) 
     {
-      indNA <- indNA[-nbt]  
-      texpo <- texpo[-nbt]
+      indNA = indNA[-nbt]  
+      texpo = texpo[-nbt]
     }  
-    
-    
-    ##initialisation du data frame
-    donnees <- data.frame(int=1,texpo,indNA)  #autant de ligne que de temps de mesure possible - "t" plus haut  
-    ## simuler la variable expl
-    edu <- rbinom(1,size=1,prob=var.expl1[[1]][1])  
-    age76  <- round(rnorm(1,mean=var.expl2[[1]][1],sd=var.expl2[[1]][2]),3) 
-    # ajouter X dans donnees
-    donnees <- cbind(donnees,edu,age76)
-    # Ajouter age à chaque visite de suivi 
-    donnees$age <- donnees$age76+donnees$texpo
-    # Ajouter age à la première évaluation cognitive (ss l'hyp qu'il n'y a pas de vis de cognition entre les vis de mesure de l'expo)
-    donnees$ageCog0 = donnees[dim(donnees)[1],"age"]
-    # Ajouter time d'expo > première évaluation cognitive
+ 
+    # Variables explicatives
+    donnees = data.frame(int=1,texpo,indNA)  #autant de ligne que de temps de mesure possible - "t" plus haut  
+    edu     = rbinom(1,size=1,prob=var.expl1[[1]][1])  
+    age76   = round(rnorm(1,mean=var.expl2[[1]][1],sd=var.expl2[[1]][2]),3) 
+    donnees = cbind(donnees,edu,age76)
+    donnees$age        = donnees$age76+donnees$texpo
+    donnees$ageCog0    = donnees[dim(donnees)[1],"age"]
     donnees$time_retro = donnees$age-donnees$ageCog0
     
-    # paramètres des splines
-    # noeud fixe non-depdt du sample (sinon n non comparable entre les sujets)
-    datnew <- data.frame(texpo = seq(-24,0)) ## Pas de 1 an
-    b5  = round(quantile(datnew$texpo,probs = c(0.05),na.rm=T))
-    b95 = round(quantile(datnew$texpo,probs = c(0.95),na.rm=T))
-    ## SANS INTERCEPT
+    # Splines
+    datnew = data.frame(texpo = seq(-24,0)) 
+    b5     = round(quantile(datnew$texpo,probs = c(0.05),na.rm=T))
+    b95    = round(quantile(datnew$texpo,probs = c(0.95),na.rm=T))
     if(knots==2)
     {
-      # noeud fixe non-depdt du sample (sinon n non comparable) = DATNEW
       K1 = quantile(datnew$texpo,probs = c(0.33),na.rm=T)
       K2 = quantile(datnew$texpo,probs = c(0.66),na.rm=T)
-      # /!\ PAR CONTRE la base de splines va dépendre des temps de mesure du sujet = DONNEES
-      splines <- as.matrix(ns(donnees$time_retro,knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3")
+      splines = as.matrix(ns(donnees$time_retro,knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3")
     } else if (knots==3)
     {
       K1 = quantile(datnew$texpo,probs = c(0.25),na.rm=T)	
       K2 = quantile(datnew$texpo,probs = c(0.50),na.rm=T)
       K3 = quantile(datnew$texpo,probs = c(0.75),na.rm=T)	
-      splines <- as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3","B4")
+      splines = as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4")
     } else if (knots==4)
     {
       K1 = quantile(datnew$texpo,probs = c(0.20),na.rm=T)	
       K2 = quantile(datnew$texpo,probs = c(0.40),na.rm=T)
       K3 = quantile(datnew$texpo,probs = c(0.60),na.rm=T)	
       K4 = quantile(datnew$texpo,probs = c(0.80),na.rm=T)	
-      splines <- as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3","B4","B5")
+      splines = as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4","B5")
     } 
-    
-    
-    ## ajouter splines dans donnees /!\ donnees peut être de taille différente
-    # conserver meme dim que donnees avant fusion
-    l=dim(donnees)[1]
+ 
+    l       = dim(donnees)[1]
     splines = splines[c(1:l),]  
-    donnees <- cbind(donnees,splines)
-    ## ajouter interaction avec le temps ? non - ds modèles initiaux = pblm de convergence
+    donnees = cbind(donnees,splines)
+ 
+    erreurs = sapply(sigma_expo,rnorm,n=dim(donnees)[1],mean=0)     
     
-    ## simuler les erreurs de mesures 
-    ## sapply : same jobs as lapply() function but returns a vector
-    erreurs <- sapply(sigma_expo,rnorm,n=dim(donnees)[1],mean=0)  
+    varRE   = matrix(0,nrow=nb_RE_expo,ncol=nb_RE_expo)
+    varRE[upper.tri(varRE,diag=TRUE)] = B.random_expo
+    chol.random = chol(varRE)  
+    chol.random = t(chol.random)
+    brandom     = rnorm(dim(varRE)[2])      
+    brandom     = chol.random %*% brandom
     
-    ## Récupérer les effets aleatoires : int + B1+B2+B3 dans notre cas
-    varRE <- matrix(0,nrow=nb_RE_expo,ncol=nb_RE_expo)
-    varRE[upper.tri(varRE,diag=TRUE)] <- B.random_expo
-    
-    # Compute the Choleski factorization of a real symmetric positive-definite square matrix
-    # Pr une matrice symétrique définie positive A, détermine une matrice triangulaire inférieure L telle que : A=t(LL)
-    chol.random <- chol(varRE)  
-    chol.random <- t(chol.random)
-    brandom <- rnorm(dim(varRE)[2])      
-    brandom <- chol.random %*% brandom
-    
-    # La fonction apply() permet d'appliquer une fonction (ex moyenne, somme) 
-    # à chaque ligne ou chaque colonne d'un tableau de données. Cette fonction 
-    # prend 3 arguments dans l'ordre suivant:
-    # 1. nom du tableau de données
-    # 2. la fonction doit s'appliquer aux lignes (1), aux colonnes (2) ou aux deux (c(1,2))
-    # 3. le nom de la fonction à appliquer
-    donnees2 = subset(donnees, select=-c(texpo,time_retro,ageCog0,age,indNA))
-    Xbeta <- apply(donnees2,1,function(x) sum(x*beta_expo))
+    donnees2    = subset(donnees, select=-c(texpo,time_retro,ageCog0,age,indNA))
+    Xbeta       = apply(donnees2,1,function(x) sum(x*beta_expo))
     pos_splines = grep("^B", colnames(donnees2))  
-    Xrandom <- as.matrix(donnees2[,c(1,pos_splines)])
-    donnees$BMI_real <- Xbeta + Xrandom %*% brandom 
-    donnees$erreurs=erreurs
-    donnees$BMI_obs <- donnees$BMI_real + donnees$erreurs
-    donnees$Xbeta <- Xbeta
+    Xrandom     = as.matrix(donnees2[,c(1,pos_splines)])
     
-    ## Supprimer mesures si indNA =1
+    donnees$BMI_real = Xbeta + Xrandom %*% brandom 
+    donnees$erreurs  = erreurs
+    
+    donnees$BMI_obs  = donnees$BMI_real + donnees$erreurs
+    donnees$Xbeta    = Xbeta
+    
+    ## Supprimer mesures si indNA = 1
     donnees$BMI_realNA = ifelse(donnees$indNA==1,NA,donnees$BMI_real)
-    donnees$BMI_obs = ifelse(donnees$indNA==1,NA,donnees$BMI_obs)   
-    donnees$Xbeta = ifelse(donnees$indNA==1,NA,donnees$Xbeta)   
-    
-    
-    
-    ## ajouter compteur : numvis - TRES IMPORTANT ICI POUR MERGER ENSUITE +++
-    donnees$numvis=0
+    donnees$BMI_obs    = ifelse(donnees$indNA==1,NA,donnees$BMI_obs)   
+    donnees$Xbeta      = ifelse(donnees$indNA==1,NA,donnees$Xbeta)   
+          
+    ## compteur
+    donnees$numvis = 0
     pos = which(colnames(donnees) == "numvis")
     for (j in 1:dim(donnees)[1])
     {donnees[j,pos]=j
     j=j+1}
     
-    
-    ###### HISTOIRE D'EXPOSITION SUR DONNEES OBSERVEES
+    ### HISTOIRE D'EXPOSITION SUR DONNEES OBSERVEES
     ### conserver dataset de BMI_real BMI_obs pour plotter les évolutions marginales et individuelles
     donneesBMI = subset(donnees, select=c(edu, age76,B1:B5, BMI_obs, numvis))
     donneesBMI$id=i  
@@ -255,54 +226,44 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     ########################################################
     #####   EXPOSITION AUX TEMPS DE MESURE SOUHAITES   #####
     ########################################################
-    ############## COMPUTATION OF PREDICTION EVERY YEAR #####################
+    ####### COMPUTATION OF PREDICTION EVERY YEAR ###########
     ### Créer une base de données avec Intercept 
-    datnew <- data.frame(int = rep(1,25))
-    
-    ## Ajouter les covariables du sujet utilisées dans le modèle 
-    datnew$edu = donnees[1,"edu"]
+    datnew       = data.frame(int = rep(1,25))
+    datnew$edu   = donnees[1,"edu"]
     datnew$age76 = donnees[1,"age76"]
-    
-    
-    ### paramètres des splines
-    # noeud fixe non-depdt du sample (sinon n non comparable)
+   
     tab = data.frame(time=seq(-24,0))
     ## SANS INTERCEPT
     if(knots==2)
     {
-      splines <- as.matrix(ns(tab$time,knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3")
+      splines = as.matrix(ns(tab$time,knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3")
     } else if (knots==3)
     {
-      splines <- as.matrix(ns(tab$time,knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3","B4")
+      splines = as.matrix(ns(tab$time,knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4")
     } else if (knots==4)
     {
-      splines <- as.matrix(ns(tab$time,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
-      colnames(splines) <-c("B1","B2","B3","B4","B5")
+      splines = as.matrix(ns(tab$time,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4","B5")
     } 
     
-    
-    ### Récupérer Base de splines pour 4 knots SANS INTERCEPT correspondante à -24,0 pas de 1 an
     datnew2 = cbind(datnew,splines)
-    #    View(datnew2)
+    
+    
     ##### CALCUL DES PREDICTIONS INDIVIDUELLES 
-    Xbeta <- apply(datnew2,1,function(x) sum(x*beta_expo))
+    Xbeta       = apply(datnew2,1,function(x) sum(x*beta_expo))
     pos_splines = grep("^B", colnames(datnew2))  
-    Xrandom <- as.matrix(datnew2[,c(1,pos_splines)])
-    BMI_real <- Xbeta + Xrandom %*% brandom 
+    Xrandom     = as.matrix(datnew2[,c(1,pos_splines)])
+    BMI_real    = Xbeta + Xrandom %*% brandom 
     
     ## ajouter BMI à donnee
-    datnew2$BMI_real=BMI_real
-    
+    datnew2$BMI_real = BMI_real
     
     ### Récupérer time_retro pour les splines juste après
     datnew2$time_retro = seq(-24,0)
     
-    
-    
-    
-    
+
     
     ################################################
     #####       HISTOIRE D'EXPOSITION          #####
