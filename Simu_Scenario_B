@@ -6,9 +6,9 @@ library(doParallel)
 ############################
 #####    SIMULATION    #####
 ############################
-r = 100   # nb of replicates
+r = 100   # simulation replicates
 n = 1000  # study sample size
-b = 500   # boostraps
+b = 500   # boostraps 
 
 cl <- makeCluster(100)
 registerDoParallel(cl)
@@ -114,19 +114,21 @@ B.random_Y = c(3.41772, 0.13206, 0.09768)
 # measurement error
 sigma_Y    = c(2.04727) 	
 
-## Graine 
+## Seed 
 set.seed(1)
 
 
 
+###################################################
+#####  DATAFRAME GENERATION FOR THE EXPOSURE  #####
+###################################################
 
 ########################################################
-#####     EXPOSITION AUX TEMPS DE MESURE OBSERVES  #####
+#####    EXPOSURE TO OBSERVED MEASUREMENT TIMES    #####
 ########################################################
-#### BOUCLE DE SIMULATION
 res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rbind) %dopar% 
 {
-  #### CREATION DU DATAFRAME DE L'EXPOSITION 
+  ## measurement times
   for(i in 1:n)
   {
     texpo = 0
@@ -144,7 +146,7 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
       texpo = texpo[-nbt]
     }  
  
-    # Variables explicatives
+    # Covariates
     donnees = data.frame(int=1,texpo,indNA)  #autant de ligne que de temps de mesure possible - "t" plus haut  
     edu     = rbinom(1,size=1,prob=var.expl1[[1]][1])  
     age76   = round(rnorm(1,mean=var.expl2[[1]][1],sd=var.expl2[[1]][2]),3) 
@@ -153,10 +155,11 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     donnees$ageCog0    = donnees[dim(donnees)[1],"age"]
     donnees$time_retro = donnees$age-donnees$ageCog0
     
-    # Splines
+    # Splines (WITHOUT intercept)
     datnew = data.frame(texpo = seq(-24,0)) 
     b5     = round(quantile(datnew$texpo,probs = c(0.05),na.rm=T))
     b95    = round(quantile(datnew$texpo,probs = c(0.95),na.rm=T))
+    
     if(knots==2)
     {
       K1 = quantile(datnew$texpo,probs = c(0.33),na.rm=T)
@@ -178,15 +181,26 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
       K4 = quantile(datnew$texpo,probs = c(0.80),na.rm=T)	
       splines = as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
       colnames(splines) = c("B1","B2","B3","B4","B5")
+    }  else if (knots==5)
+    {
+      K1 = quantile(datnew$texpo,probs = c(0.17),na.rm=T)	
+      K2 = quantile(datnew$texpo,probs = c(0.33),na.rm=T)
+      K3 = quantile(datnew$texpo,probs = c(0.50),na.rm=T)	
+      K4 = quantile(datnew$texpo,probs = c(0.67),na.rm=T)	
+      K5 = quantile(datnew$texpo,probs = c(0.84),na.rm=T)	
+      splines = as.matrix(ns(donnees$time_retro,knots = c(K1,K2,K3,K4,K5), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4","B5","B6")
     } 
  
     l       = dim(donnees)[1]
     splines = splines[c(1:l),]  
     donnees = cbind(donnees,splines)
  
+    # error 
     erreurs = sapply(sigma_expo,rnorm,n=dim(donnees)[1],mean=0)     
     
-    varRE   = matrix(0,nrow=nb_RE_expo,ncol=nb_RE_expo)
+    # random effect
+    varRE       = matrix(0,nrow=nb_RE_expo,ncol=nb_RE_expo)
     varRE[upper.tri(varRE,diag=TRUE)] = B.random_expo
     chol.random = chol(varRE)  
     chol.random = t(chol.random)
@@ -198,33 +212,31 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     pos_splines = grep("^B", colnames(donnees2))  
     Xrandom     = as.matrix(donnees2[,c(1,pos_splines)])
     
+    ### Computation of BMI 
     donnees$BMI_real = Xbeta + Xrandom %*% brandom 
-    donnees$erreurs  = erreurs
-    
+    donnees$erreurs  = erreurs    
     donnees$BMI_obs  = donnees$BMI_real + donnees$erreurs
     donnees$Xbeta    = Xbeta
     
-    ## Supprimer mesures si indNA = 1
+    ## missing follow-up visit 
     donnees$BMI_realNA = ifelse(donnees$indNA==1,NA,donnees$BMI_real)
     donnees$BMI_obs    = ifelse(donnees$indNA==1,NA,donnees$BMI_obs)   
     donnees$Xbeta      = ifelse(donnees$indNA==1,NA,donnees$Xbeta)   
-          
-    ## compteur
+                  
     donnees$numvis = 0
     pos = which(colnames(donnees) == "numvis")
     for (j in 1:dim(donnees)[1])
-    {donnees[j,pos]=j
-    j=j+1}
+    {donnees[j,pos] = j
+    j  = j + 1}
     
-    ### HISTOIRE D'EXPOSITION SUR DONNEES OBSERVEES
-    ### conserver dataset de BMI_real BMI_obs pour plotter les évolutions marginales et individuelles
-    donneesBMI = subset(donnees, select=c(edu, age76,B1:B5, BMI_obs, numvis))
-    donneesBMI$id=i  
+    ### data used in the two-stage estimation approach
+    donneesBMI    = subset(donnees, select=c(edu, age76,B1:B5, BMI_obs, numvis))
+    donneesBMI$id = i  
     
     
     
     ########################################################
-    #####   EXPOSITION AUX TEMPS DE MESURE SOUHAITES   #####
+    #####    EXPOSURE TO DESIRED MEASUREMENT TIMES    #####
     ########################################################
     ####### COMPUTATION OF PREDICTION EVERY YEAR ###########
     datnew       = data.frame(int = rep(1,25))
@@ -232,34 +244,32 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     datnew$age76 = donnees[1,"age76"]
    
     tab = data.frame(time=seq(-24,0))
-    ## SANS INTERCEPT
+
+    # Splines (WITHOUT intercept)
     if(knots==2)
     {
-      splines = as.matrix(ns(tab$time,knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
+      splines = as.matrix(ns(tab$time, knots = c(K1,K2), Boundary.knots = c(b5 , b95)))
       colnames(splines) = c("B1","B2","B3")
     } else if (knots==3)
     {
-      splines = as.matrix(ns(tab$time,knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
+      splines = as.matrix(ns(tab$time, knots = c(K1,K2,K3), Boundary.knots = c(b5 , b95)))
       colnames(splines) = c("B1","B2","B3","B4")
     } else if (knots==4)
     {
-      splines = as.matrix(ns(tab$time,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
+      splines = as.matrix(ns(tab$time, knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
       colnames(splines) = c("B1","B2","B3","B4","B5")
+    } else if (knots==5)
+    {
+      splines = as.matrix(ns(tab$time, knots = c(K1,K2,K3,K4,K5), Boundary.knots = c(b5 , b95)))
+      colnames(splines) = c("B1","B2","B3","B4","B5","B6")
     } 
     
-    datnew2 = cbind(datnew,splines)
-    
-    
-    ##### CALCUL DES PREDICTIONS INDIVIDUELLES 
+    datnew2     = cbind(datnew,splines)
     Xbeta       = apply(datnew2,1,function(x) sum(x*beta_expo))
     pos_splines = grep("^B", colnames(datnew2))  
     Xrandom     = as.matrix(datnew2[,c(1,pos_splines)])
     BMI_real    = Xbeta + Xrandom %*% brandom 
-    
-    ## ajouter BMI à donnee
-    datnew2$BMI_real = BMI_real
-    
-    ### Récupérer time_retro pour les splines juste après
+    datnew2$BMI_real   = BMI_real
     datnew2$time_retro = seq(-24,0)
     
 
@@ -267,38 +277,37 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     ################################################
     #####       HISTOIRE D'EXPOSITION          #####
     ################################################
-    # BASE DE SPLINES AVEC INTERCEPT == TRUE
-    K1 = quantile(datnew2$time_retro,probs = c(0.33),na.rm=T)
-    K2 = quantile(datnew2$time_retro,probs = c(0.66),na.rm=T)
-    b5 = quantile(datnew2$time_retro,probs = c(0.05),na.rm=T)
-    b95 = quantile(datnew2$time_retro,probs = c(0.95),na.rm=T)
-    splines <- as.matrix(ns(datnew2$time_retro,knots = c(K1,K2), Boundary.knots = c(b5 , b95), intercept=T))
-    colnames(splines) <-c("H1","H2","H3","H4")
-    datnew2 = cbind(datnew2,splines)
+    ## A - History of exposure (with splines)
+    # Splines (WITH intercept)
+    K11  = quantile(datnew2$time_retro, probs = c(0.33),na.rm=T)
+    K22  = quantile(datnew2$time_retro, probs = c(0.66),na.rm=T)
+    b5  = quantile(datnew2$time_retro, probs = c(0.05),na.rm=T)
+    b95 = quantile(datnew2$time_retro, probs = c(0.95),na.rm=T)
+    splines = as.matrix(ns(datnew2$time_retro, knots = c(K11,K22), Boundary.knots = c(b5 , b95), intercept=T))
+    colnames(splines) = c("H1","H2","H3","H4")
+    datnew2 = cbind(datnew2, splines)
     
-    ### Somme par colonne k pour obtenir l'histoire d'exposition
     datnew2$Hist_K1 = colSums(datnew2$BMI_real*datnew2$H1, na.rm=F)
     datnew2$Hist_K2 = colSums(datnew2$BMI_real*datnew2$H2, na.rm=F)
     datnew2$Hist_K3 = colSums(datnew2$BMI_real*datnew2$H3, na.rm=F)
     datnew2$Hist_K4 = colSums(datnew2$BMI_real*datnew2$H4, na.rm=F)
     
-    #### NORMALE TRONQUEE 
-    datnew2$eff_int_norm   = 0
-    datnew2$eff_slope_norm = 0
-   
+    ## B - History of exposure (time-dependent with distant effect)
     y = seq(-24,0,1)
     x = (y+24)/6
-    
-    ## INTERCEPT
+
+    # intercept
+    datnew2$eff_int_norm   = 0
     p = (pnorm(x,m=0,sd=1)-1)*0.1
     for (v in 1:dim(datnew2)[1])
     {datnew2$eff_int_norm[v] = p[v]}
-    ## SLOPE   
+    
+    # slope 
+    datnew2$eff_slope_norm = 0
     q = (pnorm(x,m=0,sd=1)-1)*0.03
     for (v in 1:dim(datnew2)[1])
     {datnew2$eff_slope_norm[v] = q[v]}
 
-    ## Somme par colonne k pour obtenir l'histoire d'exposition
     datnew2$Hist_int   = colSums(datnew2$BMI_real*datnew2$eff_int_norm, na.rm=F)
     datnew2$Hist_slope = colSums(datnew2$BMI_real*datnew2$eff_slope_norm, na.rm=F)
     
@@ -307,10 +316,10 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     
     
     
-    
-    ################################################
-    #####             COGNITION                #####
-    ################################################
+    ##################################################
+    #####  DATAFRAME GENERATION FOR THE OUTCOME  #####
+    ##################################################
+    ## measurement times
     t       = 0
     nbt     = 1
     indNA_Y = 0
@@ -327,7 +336,7 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
       t       = t[-nbt]
     }  
     
-    
+    ## covariates
     donnees       = data.frame(id=i,int=1,time=t, indNA_Y)    
     donnees$primo = ifelse(donnees$time == 0, 1, 0)
     l = dim(donnees)[1]
@@ -335,97 +344,99 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     tempo_hist = tempo_hist[c(1:l),]  
     donnees    = cbind(donnees,tempo_hist)    
     
+    ## random effects
     varRE = matrix(0,nrow=nb_RE_Y,ncol=nb_RE_Y)
-    varRE[upper.tri(varRE,diag=TRUE)] = B.random_Y
-    
-    chol.random = chol(varRE)  
-    chol.random = t(chol.random)
-    brandom     = rnorm(dim(varRE)[2])      
-    brandom     = chol.random %*% brandom
-    donnees$RE_int = brandom[1]
+    varRE[upper.tri(varRE,diag=TRUE)] = B.random_Y    
+    chol.random      = chol(varRE)  
+    chol.random      = t(chol.random)
+    brandom          = rnorm(dim(varRE)[2])      
+    brandom          = chol.random %*% brandom
+    donnees$RE_int   = brandom[1]
     donnees$RE_slope = brandom[2] 
     
     donnees$erreurs = sapply(sigma_Y,rnorm,n=dim(donnees)[1],mean=0)  
     
     ### Computation of TICS 
     donnees$TICS_real = donnees$int*41.05354 + donnees$primo*(-0.48028) + donnees$edu*(0.50522) + 
-                         donnees$age76*(-0.12349) + donnees$time*(1.14193) + donnees$Hist_int +
-                         donnees$time*donnees$edu*(-0.00254) + donnees$time*donnees$age76*(-0.02448) + 
-                         donnees$time*donnees$Hist_slope + donnees$RE_int + donnees$time*donnees$RE_slope 
-    
+                        donnees$age76*(-0.12349) + donnees$time*(1.14193) + donnees$Hist_int +
+                        donnees$time*donnees$edu*(-0.00254) + donnees$time*donnees$age76*(-0.02448) + 
+                        donnees$time*donnees$Hist_slope + donnees$RE_int + donnees$time*donnees$RE_slope 
     donnees$TICS_obs  = donnees$TICS_real + donnees$erreurs
+    
+    ## missing follow-up visits
     donnees$TICS_real = ifelse(donnees$indNA_Y==1,NA,donnees$TICS_real)
     donnees$TICS_obs  = ifelse(donnees$indNA_Y==1,NA,donnees$TICS_obs)   
     
-    ## Supprimer histoire d'exposition sur les données vraies
+    ### data used in the two-stage estimation approach
     donnees_cog2 = subset(donnees, select=c(id,time, primo, edu, age76,TICS_obs))
    
     if (i==1){
       base_final = donnees_cog2
       base_BMI   = donneesBMI
     } else if(i>1) 
-    {base_final  = rbind(base_final,donnees_cog2)
-    base_BMI     = rbind(base_BMI,donneesBMI)}
-    i=i+1
+    { base_final = rbind(base_final,donnees_cog2)
+      base_BMI   = rbind(base_BMI,donneesBMI)}
+      i = i + 1
   }
   
   
   
   
   #######################################
-  #########  MODELE D'ESTIMATION ########
+  #########   ESTIMATION MODEL   ########
   #######################################
-
+  ## Linear mixed effects model for the exposure
   base_BMI$edu = as.factor(base_BMI$edu)
   m_bmi        = hlme(BMI_obs ~ edu+age76+B1+B2+B3+B4+B5, random = ~B1+B2+B3+B4+B5, subject = "id", data = base_BMI)
  
   if((z==1) & (m_bmi$conv==2)) 
   { z = 1   
   } else if((z>1) & (m_bmi$conv==2))
-  { z = z+1  
+  { z = z + 1  
   } else if (m_bmi$conv == 1)
   {
-    tab_bmi      = data.frame(id = rep(seq(1,1000), each = 25),int = rep(1,25*n))
-    tab_bmi$time = rep(seq(-24,0), 1000)
-    covar        = subset(base_BMI, select=c(id, edu, age76), numvis ==1)
-    tab_bmi2     = merge(tab_bmi, covar, by="id",all=T)
+    tab_bmi      = data.frame(id = rep(seq(1,n), each = 25),int = rep(1,25*n))
+    tab_bmi$time = rep(seq(-24,0), n)
+    covar        = subset(base_BMI, select=c(id, edu, age76), numvis == 1)
+    tab_bmi2     = merge(tab_bmi, covar, by = "id", all = T)
 
-    ## BASE SPLINES SANS INTERCEPT
+    ## splines (without intercept)
     K1  = quantile(tab_bmi2$time,probs = c(0.20),na.rm=T)
     K2  = quantile(tab_bmi2$time,probs = c(0.40),na.rm=T)
     K3  = quantile(tab_bmi2$time,probs = c(0.60),na.rm=T)
     K4  = quantile(tab_bmi2$time,probs = c(0.80),na.rm=T)
     b5  = quantile(tab_bmi2$time,probs = c(0.05),na.rm=T)
-    b95 = quantile(tab_bmi2$time,probs = c(0.95),na.rm=T)
-    
-    splines = as.matrix(ns(tab_bmi2$time,knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
+    b95 = quantile(tab_bmi2$time,probs = c(0.95),na.rm=T)    
+    splines           = as.matrix(ns(tab_bmi2$time, knots = c(K1,K2,K3,K4), Boundary.knots = c(b5 , b95)))
     colnames(splines) = c("B1","B2","B3","B4","B5")
     
-    tab_bmi2 = cbind(tab_bmi2,splines)
-    colnames(m_bmi$predRE) = c("id","intBMI", "RE_B1", "RE_B2", "RE_B3", "RE_B4", "RE_B5")
-    tab_bmi3 = merge(tab_bmi2, m_bmi$predRE, by="id", all=T)
-
+    tab_bmi2               = cbind(tab_bmi2, splines)
+    colnames(m_bmi$predRE) = c("id", "intBMI", "RE_B1", "RE_B2", "RE_B3", "RE_B4", "RE_B5")
+    tab_bmi3               = merge(tab_bmi2, m_bmi$predRE, by="id", all=T)
     
-    ##### CALCUL DES PREDICTIONS INDIVIDUELLES 
+    ## Computation of individual predictions of exposure
     tab_bmi3$edu      = as.numeric(tab_bmi3$edu)
-    tab_bmi3$BMI_pred = m_bmi$best[1] + tab_bmi3$edu*m_bmi$best[2] + tab_bmi3$age76*m_bmi$best[3] + tab_bmi3$B1*m_bmi$best[4] +
-                                        tab_bmi3$B2*m_bmi$best[5] + tab_bmi3$B3*m_bmi$best[6] + tab_bmi3$B4*m_bmi$best[7] + 
-                                        tab_bmi3$B5*m_bmi$best[8] + tab_bmi3$intBMI + tab_bmi3$B1*tab_bmi3$RE_B1 +  
-                                        tab_bmi3$B2*tab_bmi3$RE_B2 + tab_bmi3$B3*tab_bmi3$RE_B3 + tab_bmi3$B4*tab_bmi3$RE_B4 +  
+    tab_bmi3$BMI_pred = m_bmi$best[1] + tab_bmi3$edu*m_bmi$best[2] + 
+                                        tab_bmi3$age76*m_bmi$best[3] + 
+                                        tab_bmi3$B1*m_bmi$best[4] +
+                                        tab_bmi3$B2*m_bmi$best[5] + 
+                                        tab_bmi3$B3*m_bmi$best[6] + 
+                                        tab_bmi3$B4*m_bmi$best[7] + 
+                                        tab_bmi3$B5*m_bmi$best[8] + 
+                                        tab_bmi3$intBMI + 
+                                        tab_bmi3$B1*tab_bmi3$RE_B1 +  
+                                        tab_bmi3$B2*tab_bmi3$RE_B2 + 
+                                        tab_bmi3$B3*tab_bmi3$RE_B3 + 
+                                        tab_bmi3$B4*tab_bmi3$RE_B4 +  
                                         tab_bmi3$B5*tab_bmi3$RE_B5
-
     
-    ###### CALCUL DE L'HISTOIRE D'EXPOSITION  ######
-    ##################################################################
-    ####            Base de splines  -   2  KNOTS                 ####
-    ##################################################################
+    ## Computation of the history exposure
     K11 = quantile(tab_bmi3$time,probs = c(0.33),na.rm=T)	
     K22 = quantile(tab_bmi3$time,probs = c(0.66),na.rm=T)
     b5  = quantile(tab_bmi3$time,probs = c(0.05),na.rm=T)
     b95 = quantile(tab_bmi3$time,probs = c(0.95),na.rm=T)
-
     tab_bmi3 = tab_bmi3[order(tab_bmi3[,1], tab_bmi3[,3]), ]
-    B2K      = as.matrix(ns(tab_bmi3$time,knots = c(K11,K22),Boundary.knots = c(b5,b95), intercept = T)) 
+    B2K      = as.matrix(ns(tab_bmi3$time,knots = c(K11, K22), Boundary.knots = c(b5, b95), intercept = T)) 
     nz       = ncol(B2K)
     tab      = tab_bmi3
     tab[,((ncol(tab_bmi3)+1):(ncol(tab_bmi3)+nz))] = B2K
@@ -442,9 +453,9 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     tab$Hist_K4 = 0
     
     ## H1
-    i=1   ## lignes
-    j=-24 ## temps
-    k = 1 ## sujet
+    i = 1   ## lines
+    j = -24 ## times
+    k = 1 ## subject
     x = 0 ## sum 
     for (i in 1:dim(tab)[1]){
       if (tab$id[i]==k){
@@ -456,11 +467,12 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         tab$Hist_K1[i] = x
         k=k+1}
     }  
+    
     ## H2
-    i=1   ## lignes
-    j=-24 ## temps
-    k = 1 ## sujet
-    x = 0 ## sum 
+    i = 1   
+    j = -24 
+    k = 1 
+    x = 0  
     for (i in 1:dim(tab)[1]){
       if (tab$id[i]==k){
         x = x + tab$coco2[i]
@@ -474,10 +486,10 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     }
     
     ## H3
-    i=1   ## lignes
-    j=-24 ## temps
-    k = 1 ## sujet
-    x = 0 ## sum 
+    i = 1   
+    j = -24 
+    k = 1 
+    x = 0 
     for (i in 1:dim(tab)[1]){
       if (tab$id[i]==k){
         x = x + tab$coco3[i]
@@ -490,10 +502,10 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
     }  
     
     ## H4
-    i=1   ## lignes
-    j=-24 ## temps
-    k = 1 ## sujet
-    x = 0 ## sum 
+    i = 1   
+    j = -24 
+    k = 1 
+    x = 0 
     for (i in 1:dim(tab)[1]){
       if (tab$id[i]==k){
         x = x + tab$coco4[i]
@@ -505,20 +517,19 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         k=k+1}
     }  
     
-    ### INSERER DANS base_final LES HISTOIRES D'EXPOSITION 
-    try         = subset(tab,select=c(id,Hist_K1:Hist_K4), time==0)
-    base_final2 = merge(base_final,try, by="id", all=T)
+    try         = subset(tab, select=c(id,Hist_K1:Hist_K4), time==0)
+    base_final2 = merge(base_final, try, by="id", all=T)
 
 
-    #### Modèle mixte pour la cognition 
+    ## Linear mixed effects model for the outcome 
     base_final2$primo = as.factor(base_final2$primo)
-    base_final2$edu   = as.factor(base_final2$edu)
-    
-    m_2K_acute = hlme(TICS_obs ~ time+primo+edu+age76 +
+    base_final2$edu   = as.factor(base_final2$edu)    
+    m_2K_acute = hlme(TICS_obs ~ time + primo + edu + age76 +
                       Hist_K1 + Hist_K2 + Hist_K3+ Hist_K4 +
                       time:(edu + age76 + Hist_K1 + Hist_K2 + Hist_K3+ Hist_K4), random = ~time, subject = "id", data = base_final2)
     
-    Bestmod = as.data.frame(t(estimates(m_2K_acute)))
+    ## dataset with estimated parameters of the simulation replicate z
+    Bestmod           = as.data.frame(t(estimates(m_2K_acute)))
     Bestmod$conv_tics = m_2K_acute$conv
     Bestmod$iter_tics = m_2K_acute$niter
     Bestmod$conv_bmi  = m_bmi$conv
@@ -587,9 +598,9 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         
     if (m_2K_acute$conv==1)
     {
-      ##############################################################
-      ####       BOOTSTRAPS  pour chaque étape de simulation R #####
-      ##############################################################
+      #############################
+      ####       BOOTSTRAPS   #####
+      #############################
       m       = m_bmi             
       tab_MED = base_BMI  
       tab_MED$int = 1     
@@ -697,8 +708,6 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         }
  
  
- 
- 
         ## FUSION - merge
         endBoot     = merge(base_final2,matH, by="id",all.x=T)
         endBoot$edu = as.factor(endBoot$edu)
@@ -767,9 +776,9 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         ii=ii+1
       }
         
-      #######################
-      ###  FIN BOOTSTRAP  ###
-      #######################
+      ##########################
+      ###  END OF BOOTSTRAP  ###
+      ##########################
       
       
       ### VARIANCE DECOMPOSITION FORMULA (used in the construction of 95%CI) ###
@@ -841,7 +850,6 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
       tab_sd = as.data.frame(tab_sd)
       tab_sd$conv_ticsB = compt_conv
 
-
      
       if (z==1){
         
@@ -854,12 +862,12 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
 
       } else if(z>1) 
       {
-        best = rbind(best,Bestmod)
-        sd_end = rbind(sd_end,sd)
-        box_end = rbind(box_end,box)
-        bestB = rbind(bestB,bestBoot)
-        sdB  = rbind(sdB,sdBoot)
-        par_sdB  = rbind(par_sdB,tab_sd)
+        best    = rbind(best, Bestmod)
+        sd_end  = rbind(sd_end, sd)
+        box_end = rbind(box_end, box)
+        bestB   = rbind(bestB, bestBoot)
+        sdB     = rbind(sdB, sdBoot)
+        par_sdB = rbind(par_sdB, tab_sd)
        }
 
     } 
