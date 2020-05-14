@@ -836,8 +836,8 @@ res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rb
         
         ### FOR TIME-VARYING EFFECTS
         ## Intra-individual variability (sd)
-        eff_varCov_tot      = var_tot[c("chiB1_2K_0","chiB2_2K_0","chiB3_2K_0","chiB4_2K_0"),c("chiB1_2K_0","chiB2_2K_0","chiB3_2K_0","chiB4_2K_0")]
-        eff_varCov_tot_time = var_tot[c("time:chiB1_2K_0","time:chiB2_2K_0","time:chiB3_2K_0","time:chiB4_2K_0"),c("time:chiB1_2K_0","time:chiB2_2K_0","time:chiB3_2K_0","time:chiB4_2K_0")]
+        eff_varCov_tot      = var_intra[c("chiB1_2K_0","chiB2_2K_0","chiB3_2K_0","chiB4_2K_0"),c("chiB1_2K_0","chiB2_2K_0","chiB3_2K_0","chiB4_2K_0")]
+        eff_varCov_tot_time = var_intra[c("time:chiB1_2K_0","time:chiB2_2K_0","time:chiB3_2K_0","time:chiB4_2K_0"),c("time:chiB1_2K_0","time:chiB2_2K_0","time:chiB3_2K_0","time:chiB4_2K_0")]
         # intercept
         box$var_intra_effI   = 0
         for (bb in 1:dim(box)[1])
