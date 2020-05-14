@@ -2,20 +2,17 @@
 ##### PACKAGES
 library(foreach)
 library(doParallel)
-library(lcmm)
-library(splines)
-library(survival)
-library(MASS)
+
 
 ############################
 #####    SIMULATION    #####
 ############################
-r = 100   # simulation replicates
+r = 100        # simulation replicates
 nb_ind = 1000  # study sample size
-nb_boot = 2   # boostraps 
+nb_boot = 250  # boostraps 
 
-#cl <- makeCluster(100)
-#registerDoParallel(cl)
+cl <- makeCluster(100)
+registerDoParallel(cl)
 
 
 ####################################
@@ -130,7 +127,7 @@ set.seed(1)
 ########################################################
 #####    EXPOSURE TO OBSERVED MEASUREMENT TIMES    #####
 ########################################################
-for (r in 1:z)
+res = foreach (z=1:r,.packages=c("splines","survival","MASS","lcmm"),.combine=rbind) %dopar%
    {
     ## measurement times
     for(i in 1:nb_ind)
@@ -948,24 +945,8 @@ for (r in 1:z)
         tab_sd = as.data.frame(tab_sd)
         tab_sd$conv_ticsB = compt_conv
         
-        if (z==1){
-          
-          best    = Bestmod  ## Paramètres brutes du modèle
-          sd_end  = sd       ## SD des paramètres du modèle 
-          box_end = box      ## effets + IC95% (avec ou sans considérer la variabilité à l'étape 1) + coverages (Boxplot)
-          bestB   = bestBoot ## Paramètres issus des b bootstraps
-          sdB     = sdBoot   ## SD des paramètres issus des b bootstraps
-          par_sdB = tab_sd   ## Variance tot des paramètres issus des b bootstraps
-          
-        } else if(z>1) 
-        {
-          best    = rbind(best, Bestmod)
-          sd_end  = rbind(sd_end, sd)
-          box_end = rbind(box_end, box)
-          bestB   = rbind(bestB, bestBoot)
-          sdB     = rbind(sdB, sdBoot)
-          par_sdB = rbind(par_sdB, tab_sd)
-        }
+     
+        box_end = box      ## effets + IC95% (avec ou sans considérer la variabilité à l'étape 1) + coverages (Boxplot)
         
       } 
       
